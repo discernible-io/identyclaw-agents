@@ -15,7 +15,7 @@ no extra credentials**. The Passport *is* the credential.
 |---|---|---|
 | Gateway image | `ghcr.io/openclaw/openclaw` | Pinned slim image + Himalaya, near-cli-rs, Discord (`Containerfile.agent`) |
 | Host install | `openclaw onboard`, Docker, npm | Rootless **Podman** via `./identyclaw.sh` |
-| Runtime state | `~/.openclaw/` | Sibling `../openclaw-agents-app/` (`./identyclaw.sh init`) |
+| Runtime state | `~/.openclaw/` | Sibling `../openclaw-agents-app/` (`./identyclaw.sh init` then `setup`) |
 | Agent identity | Not included | IdentyClaw Passport + `identyclaw-tools` plugin |
 | Calling peer APIs | Vendor API keys in config | Prove Passport key possession; peer mints a JWT. No API keys. |
 | Multi-agent / A2A | Bring your own | `identyclaw-a2a` plugin, RODiT JWT, optional peer discovery |
@@ -92,30 +92,38 @@ Full operator reference: [`OPERATOR.md`](./OPERATOR.md).
 git clone https://github.com/discernible-io/openclaw-agents.git ~/identyclaw-agents
 cd ~/identyclaw-agents
 chmod +x identyclaw.sh
-./identyclaw.sh init          # creates ../openclaw-agents-app/, env.local, then Passport enroll
+./identyclaw.sh init          # creates ../openclaw-agents-app/ + env.local
 # Edit ../openclaw-agents-app/env.local — set AGENT_IDS (e.g. agent-a), emails, ports
+./identyclaw.sh setup         # populate -app; last: auto NEAR account + Passport mint guide
 ./identyclaw.sh build-image
 ./identyclaw.sh start all
 ```
 
-`init` installs the host `idcp` helper, enrolls a NEAR implicit account per agent in
-`AGENT_IDS`, pauses for mint at [purchase.identyclaw.com](https://purchase.identyclaw.com),
-then activates the home session (`ensure_session` / `me`). Resume a paused mint with
-`./identyclaw.sh idcp-setup <id>` (or `idcp-setup all`). Skip Passport during init with
-`SKIP_IDCP_SETUP=1`.
+`init` only creates the sibling app directory (config and secrets live there).
+`setup` populates agent state from `env.local`, then **automatically** creates a
+NEAR implicit account (no operator input). It prints the recipient hex plus any
+Passport fields already collected (A2A / webhook URL, avatar URL, ContactURI)
+as **[selected]**, and asks you to mint at
+[purchase.identyclaw.com](https://purchase.identyclaw.com). Resume a paused mint
+with `./identyclaw.sh idcp-setup <id>` (or `idcp-setup all`). Skip Passport
+during setup with `SKIP_IDCP_SETUP=1`.
 
 Runtime state lives in `../openclaw-agents-app/` (override with
 `IDENTYCLAW_APP_DIR`). LLM keys and Migadu passwords can wait until after
-Passport enrollment if you only need identity/A2A smoke tests.
+Passport enrollment if you only need identity/A2A smoke tests. After mint,
+chat on the console (`./identyclaw.sh chat <id>`) or via Telegram if a bot
+token was stored during setup.
 
 ### 2. Create a NEAR implicit account
 
-`./identyclaw.sh init` (or `idcp-setup`) already creates credentials under the agent’s
-app state. Keys stay on disk — **never paste private keys into chat**.
+`./identyclaw.sh setup` (or `idcp-setup`) **creates the implicit account
+automatically** — no operator input. Keys stay on disk — **never paste private
+keys into chat**.
 
-If you skipped Passport during init, or need another account:
+If you skipped Passport during setup (`SKIP_IDCP_SETUP=1`), or need another
+account:
 
-**Option A — host idcp (same path as init):**
+**Option A — host idcp (same path as setup):**
 
 ```bash
 ./identyclaw.sh idcp-setup agent-a
@@ -160,16 +168,19 @@ agent’s 64-char hex id as the **NEAR account that receives the Passport**.
 1. Open **[https://purchase.identyclaw.com](https://purchase.identyclaw.com)**.
 2. Connect NEAR Wallet (HOT) and approve in the extension / popup.
 3. Paste the agent’s **64-char hex** `implicit_account_id` as the recipient
-   (implicit hex, not a named `*.near` account).
-4. Fill creature/role, name, optional Contact URI / webhook URL
-   (`./identyclaw.sh webhook-url agent-a`), pick a tier, and mint.
-5. Wait for chain confirmation (~seconds).
+   (implicit hex, not a named `*.near` account). Setup prints this as the
+   recipient and marks any collected A2A / webhook URL, avatar URL, and
+   ContactURI as **[selected]**.
+4. Fill remaining portal fields (name, creature/role, traits, longevity).
+   Use `./identyclaw.sh webhook-url agent-a` if you need the webhook URL again.
+5. Connect the paying wallet, pick a tier, mint, wait for chain confirmation
+   (~seconds).
 
 FAQ: [purchase.identyclaw.com/faq](https://purchase.identyclaw.com/faq).
 
 ### 5. Activate on OpenClaw (home session)
 
-If you completed `./identyclaw.sh init` / `idcp-setup` through the mint pause, the
+If you completed `./identyclaw.sh setup` / `idcp-setup` through the mint pause, the
 home session is already active (`idcp ensure_session` + `me`). Otherwise:
 
 ```bash
@@ -266,9 +277,11 @@ plugin JWT cache (see [`OPERATOR.md`](./OPERATOR.md)).
 cd ~/identyclaw-agents
 ./identyclaw.sh init
 # Edit ../openclaw-agents-app/env.local — AGENT_IDS, emails, ports
+./identyclaw.sh setup         # populate -app; auto NEAR account; mint Passport
 ./identyclaw.sh build-image
 ./identyclaw.sh start all
 ./identyclaw.sh status
+./identyclaw.sh chat agent-a  # or message the Telegram bot if configured
 ```
 
 Then per agent in `AGENT_IDS`:
@@ -329,8 +342,9 @@ exposing a Gateway remotely.
 
 | Command | Description |
 |---------|-------------|
-| `./identyclaw.sh init` | Create sibling app dir + `env.local` + Passport enroll |
-| `./identyclaw.sh idcp-setup [id\|all]` | Passport only: enroll → purchase → session |
+| `./identyclaw.sh init` | Create sibling app dir + `env.local` |
+| `./identyclaw.sh setup` | Populate -app; last: auto NEAR enroll + Passport mint guide |
+| `./identyclaw.sh idcp-setup [id\|all]` | Passport only: auto enroll → purchase → session |
 | `./identyclaw.sh idcp <id> <cmd…>` | Low-level Passport ops (`enroll`, `ensure_session`, `me`, …) |
 | `./identyclaw.sh build-image` | Build `openclaw-agent:local` |
 | `./identyclaw.sh start all` | Start every agent in `AGENT_IDS` |

@@ -1,5 +1,5 @@
 # IdentyClaw Passport host helpers (enroll → purchase → ensure_session).
-# Pattern mirrors hermes-agents/deploy/hermes.sh idcp-* commands.
+# Pattern: init creates -app; setup populates it; last step is automatic NEAR enroll.
 
 # Stop agent containers and restore host ownership so we can write near-credentials.
 # Mirrors hermes setup stopping the gateway before idcp-setup.
@@ -100,22 +100,216 @@ _idcp_mark_active() {
   chmod 600 "$dir/${account_id}.json" 2>/dev/null || true
 }
 
-# Natural IdentyClaw path: install → enroll → purchase guide → ensure_session → me.
-# Invoked from init (default) or standalone to resume after mint.
-# Usage: idcp_setup_one_agent <agent-id>
-idcp_setup_one_agent() {
-  local id="${1:?}"
-  local home enroll_json account_id tmp_sess tmp_me attempt max_attempts
+# ContactURI for purchase.identyclaw.com: scheme:authority:identifier
+# Preference: explicit CONTACT_URI → telegram:telegram.com:@user → email:domain:addr
+identyclaw_format_contact_uri() {
+  local explicit="${1:-}" tg="${2:-}" email="${3:-}" domain
+  explicit="${explicit//[[:space:]]/}"
+  if [[ -n "$explicit" ]]; then
+    printf '%s' "$explicit"
+    return 0
+  fi
+  tg="${tg#@}"
+  tg="${tg//[[:space:]]/}"
+  if [[ -n "$tg" ]]; then
+    printf 'telegram:telegram.com:@%s' "$tg"
+    return 0
+  fi
+  email="${email//[[:space:]]/}"
+  if [[ -n "$email" && "$email" == *@* ]]; then
+    domain="${email#*@}"
+    printf 'email:%s:%s' "$domain" "$email"
+    return 0
+  fi
+  return 0
+}
 
-  home="$(agent_home "$id")"
-  ensure_idcp_layout_for_agent "$id"
-  write_idcp_wallet_scripts "$home" "$id" 2>/dev/null || true
+print_passport_field() {
+  local name="$1" value="${2:-}" collect_hint="${3:-enter on purchase.identyclaw.com}"
+  if [[ -n "$value" ]]; then
+    printf '  %-22s [selected]  %s\n' "$name" "$value"
+  else
+    printf '  %-22s [collect]   %s\n' "$name" "$collect_hint"
+  fi
+}
+
+print_passport_webhook_field() {
+  local name="$1" value="${2:-}"
+  if [[ -z "$value" ]]; then
+    print_passport_field "$name" "" "public HTTPS A2A / webhook URL"
+    return 0
+  fi
+  if [[ "$value" == *127.0.0.1* || "$value" == *localhost* ]]; then
+    printf '  %-22s [collect]   %s  (loopback — paste a public HTTPS URL on the portal)\n' "$name" "$value"
+    return 0
+  fi
+  print_passport_field "$name" "$value" ""
+}
+
+upsert_env_local_kv() {
+  local file="${1:?}" key="${2:?}" value="${3:-}"
+  [[ -n "$value" ]] || return 0
+  python3 - "$file" "$key" "$value" <<'PY'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+key, value = sys.argv[2], sys.argv[3]
+text = path.read_text() if path.is_file() else ""
+lines = text.splitlines(True)
+prefix = f"{key}="
+out, found = [], False
+for line in lines:
+    stripped = line.lstrip()
+    if stripped.startswith(prefix) and not stripped.startswith("#"):
+        out.append(f"{key}={value}\n")
+        found = True
+    else:
+        out.append(line)
+if not found:
+    if out and not str(out[-1]).endswith("\n"):
+        out.append("\n")
+    out.append(f"{key}={value}\n")
+path.parent.mkdir(parents=True, exist_ok=True)
+path.write_text("".join(out))
+PY
+}
+
+identyclaw_prompt_with_default() {
+  local prompt="$1" default="${2:-}" var=""
+  if [[ ! -t 0 ]] || [[ "${SKIP_SETUP_PROMPTS:-0}" == "1" ]]; then
+    printf '%s' "$default"
+    return 0
+  fi
+  if [[ -n "$default" ]]; then
+    read -r -p "${prompt} [${default}]: " var || true
+  else
+    read -r -p "${prompt}: " var || true
+  fi
+  printf '%s' "${var:-$default}"
+}
+
+agent_passport_webhook_url() {
+  local id="${1:?}" url=""
+  load_env
+  url="$(agent_env_value "$id" WEBHOOK_URL "")"
+  [[ -n "$url" ]] && { printf '%s' "$url"; return 0; }
+  url="$(agent_ingress_base_url "$id" 2>/dev/null || true)"
+  [[ -n "$url" ]] && { printf '%s' "$url"; return 0; }
+  agent_webhook_url "$id" 2>/dev/null || true
+}
+
+agent_passport_avatar_url() {
+  local id="${1:?}"
+  load_env
+  agent_env_value "$id" AVATAR_URL "${IDENTYCLAW_AVATAR_URL:-}"
+}
+
+agent_passport_contact_uri() {
+  local id="${1:?}" explicit tg email
+  load_env
+  explicit="$(agent_env_value "$id" CONTACT_URI "")"
+  tg="$(agent_env_value "$id" TELEGRAM_BOT_USERNAME "")"
+  email="$(agent_env_value "$id" EMAIL "")"
+  identyclaw_format_contact_uri "$explicit" "$tg" "$email"
+}
+
+agent_passport_telegram_hint() {
+  local id="${1:?}" tg
+  load_env
+  tg="$(agent_env_value "$id" TELEGRAM_BOT_USERNAME "")"
+  tg="${tg#@}"
+  if [[ -n "$tg" ]]; then
+    printf '@%s' "$tg"
+    return 0
+  fi
+  if [[ -f "$(agent_home "$id")/secrets/TELEGRAM_BOT_TOKEN" ]]; then
+    printf 'Telegram token is stored — message the bot after start'
+    return 0
+  fi
+}
+
+# Persist operator-chosen Passport fields collected during setup.
+setup_collect_passport_fields_one() {
+  local id="${1:?}" prefix webhook avatar contact envf
+  load_env
+  prefix="$(agent_env_prefix "$id")" || return 1
+  envf="$(identyclaw_env_file)"
+  webhook="$(agent_passport_webhook_url "$id")"
+  avatar="$(agent_passport_avatar_url "$id")"
+  contact="$(agent_passport_contact_uri "$id")"
 
   echo ""
-  echo "=== IdentyClaw Passport: ${id} ==="
-  echo "Enrolling NEAR implicit account (agent key file — not the paying wallet) ..."
+  echo "==> Passport fields for ${id} (Enter keeps the value; empty means collect at purchase.identyclaw.com)"
+  if [[ -t 0 && "${SKIP_SETUP_PROMPTS:-0}" != "1" ]]; then
+    [[ -z "$webhook" || "$webhook" == *127.0.0.1* || "$webhook" == *localhost* ]] \
+      && webhook="$(identyclaw_prompt_with_default "  A2A / webhook URL" "$webhook")"
+    [[ -z "$avatar" ]] && avatar="$(identyclaw_prompt_with_default "  Avatar image URL" "$avatar")"
+    [[ -z "$contact" ]] && contact="$(identyclaw_prompt_with_default "  ContactURI" "$contact")"
+  fi
+
+  if [[ -n "$webhook" && "$webhook" != *127.0.0.1* && "$webhook" != *localhost* ]]; then
+    upsert_env_local_kv "$envf" "${prefix}_A2A_PUBLIC_BASE_URL" "$webhook"
+    export "${prefix}_A2A_PUBLIC_BASE_URL=$webhook"
+  fi
+  if [[ -n "$avatar" ]]; then
+    upsert_env_local_kv "$envf" "${prefix}_AVATAR_URL" "$avatar"
+    export "${prefix}_AVATAR_URL=$avatar"
+  fi
+  if [[ -n "$contact" ]]; then
+    upsert_env_local_kv "$envf" "${prefix}_CONTACT_URI" "$contact"
+    export "${prefix}_CONTACT_URI=$contact"
+  fi
+}
+
+print_passport_purchase_guide() {
+  local account_id="${1:?}" webhook_url="${2:-}" avatar_url="${3:-}" contact_uri="${4:-}" label="${5:-}"
+  echo ""
+  echo "──────────────────────────────────────────────────────────────"
+  if [[ -n "$label" ]]; then
+    echo "Craft your Passport for ${label} at https://purchase.identyclaw.com"
+  else
+    echo "Craft your Passport at https://purchase.identyclaw.com"
+  fi
+  echo "──────────────────────────────────────────────────────────────"
+  echo "1. Fund a SEPARATE checkout wallet with NEAR (e.g. HOT Wallet)."
+  echo "   Do not paste the agent key file into chat or the portal."
+  echo "2. Open: https://purchase.identyclaw.com"
+  echo "3. Paste this 64-char hex as the NEAR recipient account:"
+  echo ""
+  echo "   ${account_id}"
+  echo ""
+  echo "4. Fill the Passport form. Values already collected by setup are [selected]:"
+  print_passport_webhook_field "A2A / webhook URL" "$webhook_url"
+  print_passport_field "Avatar image URL" "$avatar_url" "https://identyclaw.com/avatar.png (portal default) or any https image"
+  print_passport_field "ContactURI" "$contact_uri" "scheme:authority:identifier  e.g. telegram:telegram.com:@YourBot  or  email:domain:you@domain"
+  echo ""
+  echo "   Also collect on the portal: name, creature/role, traits, longevity."
+  echo "5. Connect the paying wallet, mint, wait for confirmation."
+  echo "   Docs: https://www.discernible.io/  ·  https://api.identyclaw.com/.well-known/enrollment"
+  echo "──────────────────────────────────────────────────────────────"
+}
+
+print_operator_chat_next_steps() {
+  local id="${1:?}" tg
+  tg="$(agent_passport_telegram_hint "$id" || true)"
+  echo ""
+  echo "After mint + start, chat as the operator:"
+  echo "  Console:   ./identyclaw.sh chat ${id}"
+  if [[ -n "$tg" ]]; then
+    echo "  Telegram:  ${tg}"
+  else
+    echo "  Telegram:  ./identyclaw.sh set-telegram-token ${id}   # then message the bot"
+  fi
+}
+
+# Auto-create (or reuse) a NEAR implicit account — no operator input.
+# Progress goes to stderr; stdout is only the 64-char hex account id.
+idcp_enroll_implicit_account() {
+  local id="${1:?}" enroll_json account_id home
+  home="$(agent_home "$id")"
+  ensure_idcp_layout_for_agent "$id"
+  echo "Creating NEAR implicit account for ${id} (automatic — no operator input) ..." >&2
   enroll_json="$(_idcp_host "$id" enroll)"
-  echo "$enroll_json"
+  echo "$enroll_json" >&2
   account_id="$(
     printf '%s' "$enroll_json" | python3 -c '
 import json,sys
@@ -126,17 +320,36 @@ except Exception:
 print(d.get("account_id") or "")
 ' 2>/dev/null || true
   )"
+  account_id="${account_id//[[:space:]]/}"
   if [[ -z "$account_id" ]]; then
     account_id="$(_idcp_account_id_for_agent "$id")"
+    account_id="${account_id//[[:space:]]/}"
   fi
   if [[ -z "$account_id" ]]; then
     echo "Could not determine implicit_account_id after enroll for ${id}." >&2
     return 1
   fi
   _idcp_mark_active "$id" "$account_id"
-  # Wire .env / plugin pointers when possible (no restart required yet).
   ensure_near_credentials_active "$home" 2>/dev/null || true
   sync_identyclaw_env "$home" "" 2>/dev/null || true
+  printf '%s' "$account_id"
+}
+
+# Natural IdentyClaw path: enroll (automatic) → purchase guide → ensure_session → me.
+# Invoked from setup (last step) or standalone to resume after mint.
+# Usage: idcp_setup_one_agent <agent-id>
+idcp_setup_one_agent() {
+  local id="${1:?}"
+  local home account_id tmp_sess tmp_me attempt max_attempts
+
+  home="$(agent_home "$id")"
+  ensure_idcp_layout_for_agent "$id"
+  write_idcp_wallet_scripts "$home" "$id" 2>/dev/null || true
+
+  echo ""
+  echo "=== IdentyClaw Passport: ${id} ==="
+  account_id="$(idcp_enroll_implicit_account "$id")" || return 1
+  echo "Recipient account (automatic): ${account_id}"
 
   tmp_sess="$(mktemp)"
   tmp_me="$(mktemp)"
@@ -146,24 +359,17 @@ print(d.get("account_id") or "")
     echo "Passport already active on home (api.identyclaw.com) for ${id}:"
     cat "$tmp_me"
     rm -f "$tmp_sess" "$tmp_me"
+    print_operator_chat_next_steps "$id"
     return 0
   fi
   rm -f "$tmp_sess" "$tmp_me"
 
-  echo ""
-  echo "──────────────────────────────────────────────────────────────"
-  echo "Craft your Passport for ${id} (required)"
-  echo "──────────────────────────────────────────────────────────────"
-  echo "1. Fund a SEPARATE checkout wallet with NEAR (e.g. HOT Wallet)."
-  echo "   Do not paste the agent key file into chat or the portal."
-  echo "2. Open: https://purchase.identyclaw.com"
-  echo "3. Paste this 64-char hex as the NEAR recipient account:"
-  echo ""
-  echo "   ${account_id}"
-  echo ""
-  echo "4. Connect the paying wallet, mint, wait for confirmation."
-  echo "   Docs: https://www.discernible.io/  ·  https://api.identyclaw.com/.well-known/enrollment"
-  echo "──────────────────────────────────────────────────────────────"
+  print_passport_purchase_guide \
+    "$account_id" \
+    "$(agent_passport_webhook_url "$id")" \
+    "$(agent_passport_avatar_url "$id")" \
+    "$(agent_passport_contact_uri "$id")" \
+    "$id"
 
   if [[ ! -t 0 ]]; then
     echo "Non-interactive TTY: after minting, re-run: ./identyclaw.sh idcp-setup ${id}" >&2
@@ -183,6 +389,7 @@ print(d.get("account_id") or "")
       echo "IdentyClaw home session ready for ${id}."
       ensure_near_credentials_active "$home" 2>/dev/null || true
       sync_identyclaw_env "$home" "" 2>/dev/null || true
+      print_operator_chat_next_steps "$id"
       return 0
     fi
     if (( attempt == max_attempts )); then

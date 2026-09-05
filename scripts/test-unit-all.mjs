@@ -21,6 +21,7 @@ const suites = [
   "test-openclaw-cache-config-unit.mjs",
   "test-openclaw-model-routing-unit.py",
   "test-nginx-sidecar-unit.mjs",
+  "test-onboarding-passport-unit.mjs",
   "test-pod-restart-image-unit.mjs",
   "test-channels-calendar-unit.mjs",
 ];

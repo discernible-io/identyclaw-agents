@@ -150,7 +150,11 @@ AGENT_IDS=agent-a agent-c agent-e
 #   A2A_PEER_AGENTS=<agent-a-token-id>
 ```
 
-`./identyclaw.sh init` seeds state directories for **agent-a, agent-c, and agent-e** from `env.example`. Agents not listed in `AGENT_IDS` are simply not started — you can leave their mailbox passwords and API keys unset until you need them.
+`./identyclaw.sh init` copies `env.example` to `../openclaw-agents-app/env.local`.
+`./identyclaw.sh setup` seeds state directories for **agent-a, agent-c, and
+agent-e** (or whatever `AGENT_IDS` lists). Agents not listed in `AGENT_IDS` are
+simply not started — you can leave their mailbox passwords and API keys unset
+until you need them.
 
 Per-agent settings in `env.local` use the `AGENT_<LETTER>_` prefix matching the id suffix (`agent-a` → `AGENT_A_EMAIL`, `AGENT_A_GATEWAY_PORT`, etc.). The stock template covers `a`, `c`, and `e`; add matching blocks if you introduce custom ids.
 
@@ -163,13 +167,15 @@ Run as your normal user (not `root`):
 ```bash
 cd ~/identyclaw-agents
 chmod +x identyclaw.sh
-./identyclaw.sh init          # creates ../openclaw-agents-app/, env.local, Passport enroll per AGENT_IDS
+./identyclaw.sh init          # creates ../openclaw-agents-app/ + env.local
 # Edit ../openclaw-agents-app/env.local — set AGENT_IDS, emails, ports; passwords optional
+./identyclaw.sh setup         # populate agent dirs; auto NEAR account; mint guide
 # Resume a paused Passport mint: ./identyclaw.sh idcp-setup agent-a
-# Skip Passport during init: SKIP_IDCP_SETUP=1 ./identyclaw.sh init
+# Skip Passport during setup: SKIP_IDCP_SETUP=1 ./identyclaw.sh setup
 ./identyclaw.sh build-image
 ./identyclaw.sh start all     # starts every id in AGENT_IDS
 ./identyclaw.sh status
+./identyclaw.sh chat agent-a  # console; or Telegram if a bot token was set
 ```
 
 When Migadu passwords are ready, configure **each agent in `AGENT_IDS`**:
@@ -395,11 +401,11 @@ You can bring agents up before mail is configured. Himalaya reads credentials fr
 
 **Option B — one-time in `env.local`**
 
-Set `AGENT_A_PASSWORD`, `AGENT_C_PASSWORD`, and `AGENT_E_PASSWORD` in `env.local`, then re-run init (only writes secrets if the password fields are non-empty):
+Set `AGENT_A_PASSWORD`, `AGENT_C_PASSWORD`, and `AGENT_E_PASSWORD` in `env.local`, then re-run setup (only writes secrets if the password fields are non-empty):
 
 ```bash
 # edit env.local, then:
-./identyclaw.sh init
+./identyclaw.sh setup
 ./identyclaw.sh restart all
 ```
 
@@ -551,7 +557,7 @@ Each agent uses **three** published integrations (installed on `./identyclaw.sh 
 
 Bootstrap writes `workspace/IDENTYCLAW.md` with operator guidance. Passport credentials go in `secrets/near-credentials/*.json` per agent (synced to `IDENTYCLAW_*` env vars). The active signing account is recorded in `secrets/near-credentials/.active`.
 
-**Enrollment (Passport per agent):** `./identyclaw.sh init` runs the IdentyClaw path automatically (same pattern as Hermes `setup` → `idcp-setup`): install host `idcp`, enroll a NEAR implicit account, pause for mint at [purchase.identyclaw.com](https://purchase.identyclaw.com), then `ensure_session` / `me`. Resume with `./identyclaw.sh idcp-setup <id>`. Skip during init with `SKIP_IDCP_SETUP=1`. Manual path: create a NEAR implicit account, fund/swap NEAR via [HOT Wallet](https://hot-labs.org/wallet/) (or an exchange), mint at [purchase.identyclaw.com](https://purchase.identyclaw.com), then `near-activate` / restart and confirm with `identyclaw_get_my_identity`. For federated peers (e.g. [api.lastcradle.io](https://api.lastcradle.io)), see step 6 in [IdentyClaw Passport](./README.md#identyclaw-passport-discernible) — no vendor API keys. Official steps: [discernible.io Get Started](https://www.discernible.io/#get-started). Longer narrative: [OpenClaw + Passport onboarding](https://dev.to/discernible-io/onboard-openclaw-agents-with-identyclaw-passport-a2a-webhooks-and-multi-tenant-collaboration-3i4k). Skip minting only when peers stay inside one closed trust boundary — see [Passport vs static secrets](https://dev.to/discernible-io/identyclaw-passport-vs-static-secrets-when-cryptographic-agent-identity-beats-api-keys-pm0).
+**Enrollment (Passport per agent):** `./identyclaw.sh setup` (after `init`) is the IdentyClaw path: populate `-app`, **automatically** create a NEAR implicit account (no operator input), pause for mint at [purchase.identyclaw.com](https://purchase.identyclaw.com) with collected A2A / webhook URL, avatar URL, and ContactURI marked **[selected]**, then `ensure_session` / `me`. Resume with `./identyclaw.sh idcp-setup <id>`. Skip during setup with `SKIP_IDCP_SETUP=1`. After mint, chat on the console (`./identyclaw.sh chat <id>`) or via the chosen operator channel (for example Telegram). For federated peers (e.g. [api.lastcradle.io](https://api.lastcradle.io)), see step 6 in [IdentyClaw Passport](./README.md#identyclaw-passport-discernible) — no vendor API keys. Official steps: [discernible.io Get Started](https://www.discernible.io/#get-started).
 
 **NEAR wallet / Passport rotation:** after `build-image` (near-cli-rs) and bootstrap, agents get `workspace/scripts/idcp-wallet.sh`, `idcp-rotate-passport.sh`, and `idcp-activate-account.sh` plus the `idcp-wallet` skill. Rotate transfers the Passport on-chain and re-points `.active` / `.env` / plugin config; the agent then asks for `./identyclaw.sh restart <id>` (or operators run `./identyclaw.sh near-activate <id>`). Prefer new implicit accounts; do not reuse retired wallets.
 
@@ -918,7 +924,7 @@ Mirrors agent A’s setup on ports **18797/18798**.
 
 ```bash
 cd ~/identyclaw-agents
-./identyclaw.sh init                    # creates agent-e dir if missing
+./identyclaw.sh setup                   # creates agent-e dir if missing
 ./identyclaw.sh mirror agent-e agent-a
 ./identyclaw.sh restart agent-e
 ./identyclaw.sh set-password agent-e    # when Migadu password is ready
@@ -1090,7 +1096,7 @@ If a gateway still tries to spawn `qmd`, `env.local` or `openclaw.json` still ha
 
 ### Run as your normal user, not `root`
 
-`init` / `start` / `onboard` expect rootless mode as your normal user. State lives under `~/openclaw-agents-app/agents/<agent-id>/` for each provisioned agent. Use root only for `dnf install podman` or optional rootful mode above.
+`init` / `setup` / `start` / `onboard` expect rootless mode as your normal user. State lives under `~/openclaw-agents-app/agents/<agent-id>/` for each provisioned agent. Use root only for `dnf install podman` or optional rootful mode above.
 
 ## Commands
 
@@ -1098,7 +1104,9 @@ If a gateway still tries to spawn `qmd`, `env.local` or `openclaw.json` still ha
 |---------|-------------|
 | `./identyclaw.sh build-image` | Pull GHCR OpenClaw 2026.8.1+ + Himalaya + near-cli-rs + Discord plugin layer |
 | `./identyclaw.sh near-activate <id> [account]` | Set active NEAR creds (`.active` + `.env` + plugin) then restart |
-| `./identyclaw.sh init` | Create agent state dirs (`agent-a`, `agent-c`, `agent-e` from `env.example`) and `env.local` |
+| `./identyclaw.sh init` | Create sibling `../openclaw-agents-app/` + `env.local` |
+| `./identyclaw.sh setup` | Populate agent dirs; last: auto NEAR enroll + Passport mint guide |
+| `./identyclaw.sh idcp-setup [id\|all]` | Resume Passport: auto enroll → purchase guide → session |
 | `./identyclaw.sh set-password agent-a` | Store Migadu password locally |
 | `./identyclaw.sh set-discord-token agent-a` | Store Discord bot token in `secrets/` (synced to `.env` on start) |
 | `./identyclaw.sh set-telegram-token agent-a` | Store Telegram bot token in `secrets/` (polling standalone; webhook in pod mode) |
@@ -1198,7 +1206,7 @@ On the deployment host as the SSH deploy user:
 mkdir -p ../openclaw-agents-app/{certs,logs,agents}
 chmod 711 ../openclaw-agents-app/certs
 
-# Or: ./identyclaw.sh init  (creates app layout + env.local from env.example)
+# Or: ./identyclaw.sh init && ./identyclaw.sh setup
 cp ~/identyclaw-agents/env.example ~/openclaw-agents-app/env.local
 chmod 600 ~/openclaw-agents-app/env.local
 # Set IDENTYCLAW_DEPLOY_MODE=pod, IDENTYCLAW_INGRESS_PORT, and AGENT_*_PUBLIC_HOST for your branch
