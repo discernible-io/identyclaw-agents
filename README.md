@@ -1,5 +1,7 @@
 # OpenClaw Agents 🦞
 
+**Mint:** [Get an IdentyClaw Passport](https://purchase.identyclaw.com) (buy once — no subscription). Then use this template.
+
 **This is [Discernible](https://www.discernible.io/)'s deployment template for
 [OpenClaw](https://github.com/openclaw/openclaw).**
 Upstream remains the gateway runtime (Control UI, channels, skills, plugins).
@@ -111,7 +113,7 @@ the agent’s app state — **never paste private keys into chat**.
 
 ```bash
 podman exec -u node openclaw-agent-a \
-  bash -lc 'cd /home/node/.openclaw/workspace && bash scripts/idcp-wallet.sh genaccount'
+  bash -lc 'cd /home/node/.openclaw/workspace && bash scripts/idcp-wallet.sh gennearaccount'
 ./identyclaw.sh near-activate agent-a <implicit_account_id>
 ```
 

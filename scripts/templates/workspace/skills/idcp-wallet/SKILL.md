@@ -16,7 +16,7 @@ Credentials live in `secrets/near-credentials/<account_id>.json`. The active Pas
 bash scripts/idcp-wallet.sh
 
 # Create a new uninitialized implicit account (prefer new accounts; do not reuse retired ones)
-bash scripts/idcp-wallet.sh genaccount
+bash scripts/idcp-wallet.sh gennearaccount
 
 # Fund / initialize destination with 0.01 NEAR from funding account
 # (separate from RODiT transfer — only for new/uninitialized accounts)

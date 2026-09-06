@@ -1365,7 +1365,7 @@ Sensitive (operator approval + HOLA for chat senders). Prefer **new** implicit a
 | Need | Command |
 |------|---------|
 | List accounts | \`bash scripts/idcp-wallet.sh\` |
-| Create account | \`bash scripts/idcp-wallet.sh genaccount\` |
+| Create account | \`bash scripts/idcp-wallet.sh gennearaccount\` |
 | Fund new account (0.01 NEAR) | \`bash scripts/idcp-wallet.sh <funding> <new> init\` |
 | Send NEAR | \`bash scripts/idcp-wallet.sh <origin> <dest> near <amount>\` |
 | Transfer Passport (0.01 NEAR deposit) | \`bash scripts/idcp-wallet.sh <origin> <dest> <passport_token_id>\` — not ~0.041 NEAR |

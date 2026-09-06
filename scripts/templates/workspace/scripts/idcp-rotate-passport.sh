@@ -3,7 +3,7 @@
 #Copyright (C) 2026 Discernible-IO All Rights Reserved.
 #
 # Rotate IdentyClaw Passport to a new NEAR implicit account:
-#   1. create destination (genaccount) unless provided
+#   1. create destination (gennearaccount) unless provided
 #   2. fund destination with 0.01 NEAR from active owner
 #   3. rodit_transfer Passport token_id
 #   4. activate new account (re-point .active + .env + plugin config)
@@ -59,9 +59,9 @@ fi
 
 if [ -z "$dest_account" ]; then
   echo "==> Creating new implicit account (not for reuse of retired wallets)..."
-  dest_account="$(run_wallet genaccount | awk '/^[0-9a-f]{64}$/{print; exit}')"
+  dest_account="$(run_wallet gennearaccount | awk '/^[0-9a-f]{64}$/{print; exit}')"
   if [ -z "$dest_account" ]; then
-    echo "ERROR: genaccount did not return an account id" >&2
+    echo "ERROR: gennearaccount did not return an account id" >&2
     exit 1
   fi
   echo "    New account: $dest_account"

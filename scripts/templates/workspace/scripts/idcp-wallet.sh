@@ -81,7 +81,7 @@ sync_keychain_from_secrets() {
   done
 }
 
-# After near genaccount, import keychain file into secrets/.
+# After near gennearaccount (or deprecated genaccount), import keychain file into secrets/.
 import_keychain_account_to_secrets() {
   local account_id="$1"
   local src="$KEYCHAIN_DIR/${account_id}.json"
@@ -216,7 +216,8 @@ Options:
   $0 <origin> <dest> <rotid>      Sends RODiT / Passport (attached-deposit 0.01 NEAR; not ~0.04)
   $0 <origin> <dest> <amount>     Sends NEAR from origin to destination
   $0 <origin> <dest> near <amt>   Sends NEAR from origin to destination
-  $0 genaccount                   Creates a new uninitialized implicit account
+  $0 gennearaccount               Creates a new uninitialized implicit account
+  $0 genaccount                   Deprecated alias for gennearaccount
 
 Active Passport owner: $(active_account_id || echo "(none — set via idcp-activate-account.sh)")
 
@@ -227,7 +228,7 @@ EOF
   exit 0
 fi
 
-if [ "${1:-}" = "genaccount" ]; then
+if [ "${1:-}" = "gennearaccount" ] || [ "${1:-}" = "genaccount" ]; then
   require_near_cli || exit 1
   require_network_config || exit 1
   mkdir -p "$KEYCHAIN_DIR"
