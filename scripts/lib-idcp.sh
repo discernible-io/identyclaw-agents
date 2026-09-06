@@ -187,6 +187,119 @@ identyclaw_prompt_with_default() {
   printf '%s' "${var:-$default}"
 }
 
+# Secret prompt (no echo). Empty / non-TTY / SKIP_SETUP_PROMPTS → stdout empty.
+identyclaw_prompt_secret() {
+  local prompt="$1" var=""
+  if [[ ! -t 0 ]] || [[ "${SKIP_SETUP_PROMPTS:-0}" == "1" ]]; then
+    return 0
+  fi
+  read -r -s -p "${prompt}: " var || true
+  echo >&2
+  printf '%s' "$var"
+}
+
+_agent_secret_present() {
+  local id="${1:?}" name="${2:?}"
+  [[ -s "$(agent_home "$id")/secrets/${name}" ]]
+}
+
+# LLM key, mailbox password, Telegram — only when missing. Enter skips.
+# Call before Passport fields so ContactURI can use a newly collected Telegram username.
+# Reuses SETUP_SHARED_LLM_KEY / SETUP_SHARED_MAIL_PASSWORD across agents in one setup run.
+setup_collect_operator_secrets_one() {
+  local id="${1:?}" prefix dir key pw token tg envf provider
+  load_env
+  prefix="$(agent_env_prefix "$id")" || return 1
+  dir="$(agent_home "$id")"
+  envf="$(identyclaw_env_file)"
+  provider="$(openclaw_llm_provider)"
+
+  echo ""
+  echo "==> Operator secrets for ${id} (Enter skips; values already on disk are kept)"
+
+  if [[ "$provider" == "opencode" ]]; then
+    if ! _agent_secret_present "$id" OPENCODE_API_KEY; then
+      key="${SETUP_SHARED_LLM_KEY:-${OPENCODE_API_KEY:-}}"
+      if [[ -n "$key" && -n "${SETUP_SHARED_LLM_KEY:-}" ]]; then
+        echo "    (reusing OpenCode key from earlier agent)"
+      elif [[ -z "$key" ]]; then
+        key="$(identyclaw_prompt_secret "  OpenCode API key (sk-..., Enter skips)")"
+      fi
+      if [[ -n "$key" ]]; then
+        if write_opencode_api_key "$id" "$key"; then
+          SETUP_SHARED_LLM_KEY="$key"
+          export SETUP_SHARED_LLM_KEY
+          echo "    stored secrets/OPENCODE_API_KEY"
+        else
+          echo "    (invalid or unwritable OpenCode key — later: ./identyclaw.sh set-opencode-key ${id})"
+        fi
+      else
+        echo "    (no LLM key — chat needs: ./identyclaw.sh set-opencode-key ${id})"
+      fi
+    fi
+  else
+    if ! _agent_secret_present "$id" OPENROUTER_API_KEY; then
+      key="${SETUP_SHARED_LLM_KEY:-${OPENROUTER_API_KEY:-}}"
+      if [[ -n "$key" && -n "${SETUP_SHARED_LLM_KEY:-}" ]]; then
+        echo "    (reusing OpenRouter key from earlier agent)"
+      elif [[ -z "$key" ]]; then
+        key="$(identyclaw_prompt_secret "  OpenRouter API key (sk-or-..., Enter skips)")"
+      fi
+      if [[ -n "$key" ]]; then
+        if write_openrouter_api_key "$id" "$key"; then
+          SETUP_SHARED_LLM_KEY="$key"
+          export SETUP_SHARED_LLM_KEY
+          echo "    stored secrets/OPENROUTER_API_KEY"
+        else
+          echo "    (invalid or unwritable OpenRouter key — later: ./identyclaw.sh set-api-key ${id})"
+        fi
+      else
+        echo "    (no LLM key — chat needs: ./identyclaw.sh set-api-key ${id})"
+      fi
+    fi
+  fi
+
+  if ! _agent_secret_present "$id" imap.pass; then
+    pw="${SETUP_SHARED_MAIL_PASSWORD:-$(agent_env_value "$id" PASSWORD "")}"
+    if [[ -n "$pw" && -n "${SETUP_SHARED_MAIL_PASSWORD:-}" ]]; then
+      echo "    (reusing mailbox password from earlier agent)"
+    elif [[ -z "$pw" ]]; then
+      pw="$(identyclaw_prompt_secret "  Migadu mailbox password (Enter skips)")"
+    fi
+    if [[ -n "$pw" ]]; then
+      if write_secret_helpers "$id" "$pw"; then
+        SETUP_SHARED_MAIL_PASSWORD="$pw"
+        export SETUP_SHARED_MAIL_PASSWORD
+      fi
+    else
+      echo "    (no mailbox password — later: ./identyclaw.sh set-password ${id})"
+    fi
+  fi
+
+  if ! _agent_secret_present "$id" TELEGRAM_BOT_TOKEN; then
+    token="$(agent_env_value "$id" TELEGRAM_BOT_TOKEN "")"
+    [[ -z "$token" ]] && token="$(identyclaw_prompt_secret "  Telegram bot token (Enter skips)")"
+    if [[ -n "$token" ]]; then
+      write_telegram_token "$dir" "$token" "$(agent_container "$id")" \
+        && echo "    stored secrets/TELEGRAM_BOT_TOKEN" \
+        || echo "    (could not store Telegram token — later: ./identyclaw.sh set-telegram-token ${id})"
+    else
+      echo "    (no Telegram token — console chat still works; later: ./identyclaw.sh set-telegram-token ${id})"
+    fi
+  fi
+
+  tg="$(agent_env_value "$id" TELEGRAM_BOT_USERNAME "")"
+  tg="${tg#@}"
+  if [[ -z "$tg" ]] && { _agent_secret_present "$id" TELEGRAM_BOT_TOKEN || [[ -n "${token:-}" ]]; }; then
+    tg="$(identyclaw_prompt_with_default "  Telegram bot username (no @)" "")"
+    tg="${tg#@}"
+  fi
+  if [[ -n "$tg" ]]; then
+    upsert_env_local_kv "$envf" "${prefix}_TELEGRAM_BOT_USERNAME" "$tg"
+    export "${prefix}_TELEGRAM_BOT_USERNAME=$tg"
+  fi
+}
+
 agent_passport_webhook_url() {
   local id="${1:?}" url=""
   load_env

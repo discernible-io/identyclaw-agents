@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Unit tests: init/setup Passport field formatting (no Podman).
+ * Unit tests: init/nuke/setup Passport field formatting (no Podman).
  *
  * Run: node scripts/test-onboarding-passport-unit.mjs
  */
@@ -43,23 +43,88 @@ function bashLib(script, env = {}) {
 
 process.stdout.write("Onboarding Passport fields (unit)\n\n");
 
-runCase("identyclaw.sh usage lists init and setup", () => {
+runCase("identyclaw.sh usage lists init, nuke, and setup", () => {
   const src = readFileSync(join(repoRoot, "identyclaw.sh"), "utf8");
   assert.match(src, /cmd_init\(\)/);
+  assert.match(src, /cmd_nuke\(\)/);
   assert.match(src, /cmd_setup\(\)/);
+  assert.match(src, /nuke\) cmd_nuke/);
   assert.match(src, /setup\) cmd_setup/);
-  assert.match(src, /last: auto NEAR enroll/);
+  assert.match(src, /NEAR enroll/);
+  assert.match(src, /self-signed TLS last/);
+  assert.match(src, /never overwrites/);
 });
 
 runCase("init no longer enrolls Passport; setup does", () => {
   const src = readFileSync(join(repoRoot, "identyclaw.sh"), "utf8");
-  const initBlock = src.slice(src.indexOf("cmd_init()"), src.indexOf("cmd_setup()"));
+  const initBlock = src.slice(src.indexOf("cmd_init()"), src.indexOf("cmd_nuke()"));
   assert.equal(initBlock.includes("idcp_setup_one_agent"), false);
   assert.equal(initBlock.includes("ensure_app_layout"), true);
+  const nukeBlock = src.slice(src.indexOf("cmd_nuke()"), src.indexOf("cmd_setup()"));
+  assert.equal(nukeBlock.includes("remove_app_dir"), true);
+  assert.equal(nukeBlock.includes("idcp_setup_one_agent"), false);
   const setupBlock = src.slice(src.indexOf("cmd_setup()"), src.indexOf("cmd_idcp_setup()"));
   assert.equal(setupBlock.includes("init_agent_from_env"), true);
+  assert.equal(setupBlock.includes("setup_collect_operator_secrets_one"), true);
   assert.equal(setupBlock.includes("idcp_setup_one_agent"), true);
   assert.equal(setupBlock.includes("setup_collect_passport_fields_one"), true);
+  assert.equal(setupBlock.includes("setup_ensure_self_signed_certs"), true);
+  assert.ok(
+    setupBlock.indexOf("setup_collect_operator_secrets_one") <
+      setupBlock.indexOf("setup_collect_passport_fields_one"),
+  );
+  assert.ok(
+    setupBlock.indexOf("idcp_setup_one_agent") <
+      setupBlock.lastIndexOf("setup_ensure_self_signed_certs"),
+  );
+  assert.ok(
+    setupBlock.indexOf("require_setup_prereqs") <
+      setupBlock.indexOf("init_agent_from_env"),
+  );
+});
+
+runCase("app_dir_is_nukeable rejects unsafe paths and accepts *-app", () => {
+  const out = bashLib(`
+app_dir_is_nukeable / && echo BAD-root || echo ok-root
+app_dir_is_nukeable "$HOME" && echo BAD-home || echo ok-home
+app_dir_is_nukeable "$IDENTYCLAW_ROOT" && echo BAD-repo || echo ok-repo
+app_dir_is_nukeable /tmp/openclaw-agents && echo BAD-name || echo ok-name
+app_dir_is_nukeable /tmp/openclaw-agents-app && echo ok-app || echo BAD-app
+`);
+  assert.match(out, /ok-root/);
+  assert.match(out, /ok-home/);
+  assert.match(out, /ok-repo/);
+  assert.match(out, /ok-name/);
+  assert.match(out, /ok-app/);
+  assert.equal(out.includes("BAD-"), false);
+});
+
+runCase("ensure_app_layout does not overwrite existing env.local", () => {
+  bashLib(`
+tmp=$(mktemp -d /tmp/openclaw-agents-app.XXXXXX)
+trap 'rm -rf "$tmp"' EXIT
+export IDENTYCLAW_APP_DIR="$tmp"
+printf 'MARKER=keep-me\\n' > "$tmp/env.local"
+ensure_app_layout >/dev/null
+grep -qx 'MARKER=keep-me' "$tmp/env.local"
+`);
+});
+
+runCase("require_setup_prereqs fails when PATH has no tools", () => {
+  let failed = false;
+  try {
+    bashLib(`PATH=/nonexistent require_setup_prereqs`);
+  } catch {
+    failed = true;
+  }
+  assert.equal(failed, true);
+});
+
+runCase("identyclaw_prompt_secret is empty when SKIP_SETUP_PROMPTS=1", () => {
+  const out = bashLib(`identyclaw_prompt_secret "secret"; printf 'EMPTY'`, {
+    SKIP_SETUP_PROMPTS: "1",
+  });
+  assert.equal(out, "EMPTY");
 });
 
 runCase("identyclaw_format_contact_uri prefers explicit then telegram then email", () => {

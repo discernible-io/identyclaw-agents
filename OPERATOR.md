@@ -67,7 +67,7 @@ This repo follows shared RODiT standards vendored at [`../docs/docs/`](../docs/d
 | --- | --- |
 | **Podman** (rootless recommended) | AlmaLinux / RHEL / Fedora: `sudo dnf install -y podman` |
 | **Node.js 22+** (host) | Used by test/probe scripts; CI runs `node scripts/test-unit-all.mjs` |
-| **Sibling app directory** | Default `../openclaw-agents-app` — created by `./identyclaw.sh init` |
+| **Sibling app directory** | Default `../openclaw-agents-app` — created by `./identyclaw.sh init` (never overwrites; use `nuke` to replace) |
 | **Migadu mailboxes** | One per agent you enable in `AGENT_IDS`; set `AGENT_*_EMAIL` in `env.local` |
 | **OpenRouter or OpenCode key** | Before onboard/chat: `./identyclaw.sh set-api-key` or `set-opencode-key` |
 | **NEAR Passport credentials** | Required for A2A, webhooks, and HOLA — see [IdentyClaw Passport](./README.md#identyclaw-passport-discernible) (`secrets/near-credentials/*.json`, `.active`; wallet helpers: `workspace/scripts/idcp-*.sh`) |
@@ -92,14 +92,21 @@ The **git checkout** holds scripts and image definitions only. **Config, TLS, an
 
 Override the app root: `export IDENTYCLAW_APP_DIR=/custom/path` (default: `../openclaw-agents-app` next to the clone).
 
-## Factory reset (brand-new agent brain)
+## Factory reset vs nuke
 
-`init` / `restart` keep learned state (sessions, `MEMORY.md`, extra skills). To rebuild an agent **out of the box** while keeping credentials:
+`init` never overwrites existing files. `factory-reset` wipes learned agent
+state (sessions, `MEMORY.md`, extra skills) **while keeping** credentials and
+Passport keys. `nuke` deletes the entire sibling `-app` directory and re-seeds
+templates — secrets, Passport, TLS, and sessions are all gone.
 
 ```bash
 ./identyclaw.sh factory-reset agent-e          # type agent-e to confirm
 ./identyclaw.sh factory-reset all --yes        # every AGENT_IDS entry, no prompt
+./identyclaw.sh nuke                           # type openclaw-agents-app to confirm
+./identyclaw.sh nuke --yes                     # skip prompt (scripts / CI)
 ```
+
+Factory-reset wipe vs keep:
 
 | Wiped | Kept |
 | --- | --- |
@@ -167,7 +174,7 @@ Run as your normal user (not `root`):
 ```bash
 cd ~/identyclaw-agents
 chmod +x identyclaw.sh
-./identyclaw.sh init          # creates ../openclaw-agents-app/ + env.local
+./identyclaw.sh init          # creates ../openclaw-agents-app/ + env.local if missing (never overwrites)
 # Edit ../openclaw-agents-app/env.local — set AGENT_IDS, emails, ports; passwords optional
 ./identyclaw.sh setup         # populate agent dirs; auto NEAR account; mint guide
 # Resume a paused Passport mint: ./identyclaw.sh idcp-setup agent-a
@@ -1104,8 +1111,9 @@ If a gateway still tries to spawn `qmd`, `env.local` or `openclaw.json` still ha
 |---------|-------------|
 | `./identyclaw.sh build-image` | Pull GHCR OpenClaw 2026.8.1+ + Himalaya + near-cli-rs + Discord plugin layer |
 | `./identyclaw.sh near-activate <id> [account]` | Set active NEAR creds (`.active` + `.env` + plugin) then restart |
-| `./identyclaw.sh init` | Create sibling `../openclaw-agents-app/` + `env.local` |
-| `./identyclaw.sh setup` | Populate agent dirs; last: auto NEAR enroll + Passport mint guide |
+| `./identyclaw.sh init` | Create sibling `../openclaw-agents-app/` + `env.local` if missing (never overwrites) |
+| `./identyclaw.sh nuke [--yes]` | Delete `-app` and re-seed from templates (overwrites; type basename or `--yes`) |
+| `./identyclaw.sh setup` | Populate agent dirs (LLM/mail/Telegram if missing, Passport); NEAR enroll; self-signed TLS last |
 | `./identyclaw.sh idcp-setup [id\|all]` | Resume Passport: auto enroll → purchase guide → session |
 | `./identyclaw.sh set-password agent-a` | Store Migadu password locally |
 | `./identyclaw.sh set-discord-token agent-a` | Store Discord bot token in `secrets/` (synced to `.env` on start) |

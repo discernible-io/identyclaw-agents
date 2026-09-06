@@ -92,15 +92,18 @@ Full operator reference: [`OPERATOR.md`](./OPERATOR.md).
 git clone https://github.com/discernible-io/openclaw-agents.git ~/identyclaw-agents
 cd ~/identyclaw-agents
 chmod +x identyclaw.sh
-./identyclaw.sh init          # creates ../openclaw-agents-app/ + env.local
+./identyclaw.sh init          # creates ../openclaw-agents-app/ + env.local if missing (never overwrites)
 # Edit ../openclaw-agents-app/env.local — set AGENT_IDS (e.g. agent-a), emails, ports
 ./identyclaw.sh setup         # populate -app; last: auto NEAR account + Passport mint guide
 ./identyclaw.sh build-image
 ./identyclaw.sh start all
 ```
 
-`init` only creates the sibling app directory (config and secrets live there).
-`setup` populates agent state from `env.local`, then **automatically** creates a
+`init` only creates the sibling app directory (config and secrets live there)
+and **never overwrites** existing files. To wipe and re-seed from templates,
+use `./identyclaw.sh nuke` (confirmation required, or `--yes`).
+`setup` populates agent state from `env.local`, prompts for missing operator
+secrets (LLM key, mailbox password, Telegram), then **automatically** creates a
 NEAR implicit account (no operator input). It prints the recipient hex plus any
 Passport fields already collected (A2A / webhook URL, avatar URL, ContactURI)
 as **[selected]**, and asks you to mint at
@@ -109,9 +112,10 @@ with `./identyclaw.sh idcp-setup <id>` (or `idcp-setup all`). Skip Passport
 during setup with `SKIP_IDCP_SETUP=1`.
 
 Runtime state lives in `../openclaw-agents-app/` (override with
-`IDENTYCLAW_APP_DIR`). LLM keys and Migadu passwords can wait until after
-Passport enrollment if you only need identity/A2A smoke tests. After mint,
-chat on the console (`./identyclaw.sh chat <id>`) or via Telegram if a bot
+`IDENTYCLAW_APP_DIR`). Missing LLM keys, mailbox passwords, and Telegram tokens
+are prompted during `setup` (Enter skips). After mint, `setup` creates
+self-signed TLS PEMs under `../openclaw-agents-app/certs/` if they are missing.
+Chat on the console (`./identyclaw.sh chat <id>`) or via Telegram if a bot
 token was stored during setup.
 
 ### 2. Create a NEAR implicit account
@@ -342,8 +346,9 @@ exposing a Gateway remotely.
 
 | Command | Description |
 |---------|-------------|
-| `./identyclaw.sh init` | Create sibling app dir + `env.local` |
-| `./identyclaw.sh setup` | Populate -app; last: auto NEAR enroll + Passport mint guide |
+| `./identyclaw.sh init` | Create sibling app dir + `env.local` if missing (never overwrites) |
+| `./identyclaw.sh nuke [--yes]` | Delete `-app` and re-seed from templates (overwrites) |
+| `./identyclaw.sh setup` | Populate -app (LLM/mail/Telegram if missing, Passport); NEAR enroll; self-signed TLS last |
 | `./identyclaw.sh idcp-setup [id\|all]` | Passport only: auto enroll → purchase → session |
 | `./identyclaw.sh idcp <id> <cmd…>` | Low-level Passport ops (`enroll`, `ensure_session`, `me`, …) |
 | `./identyclaw.sh build-image` | Build `openclaw-agent:local` |

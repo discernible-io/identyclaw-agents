@@ -103,8 +103,51 @@ ensure_app_layout() {
   fi
 }
 
-# Bootstrap TLS for nginx when no CA-issued certs are installed.
-# RODiT JWT handles mutual auth on A2A/webhooks; self-signed PEMs encrypt transport only.
+# True when path is a sibling *-app dir (not /, $HOME, or the git checkout).
+app_dir_is_nukeable() {
+  local app="${1:?}"
+  local abs
+  abs="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$app")"
+  [[ -n "$abs" && "$abs" != "/" ]] || return 1
+  [[ "$abs" != "$HOME" ]] || return 1
+  [[ "$(basename "$abs")" == *-app ]] || return 1
+  [[ "$abs" != "$IDENTYCLAW_ROOT" ]] || return 1
+  [[ "$abs" != "$(cd "$IDENTYCLAW_ROOT/.." && pwd)" ]] || return 1
+  return 0
+}
+
+confirm_app_nuke() {
+  local app="${1:?}" yes="${2:-0}" base reply
+  base="$(basename "$app")"
+  echo "This DELETES ${app}"
+  echo "  env.local, secrets, Passport keys, sessions, TLS — all gone."
+  echo "  factory-reset only wipes memory; nuke replaces the whole -app directory."
+  if [[ "$yes" == "1" ]]; then
+    return 0
+  fi
+  if [[ ! -t 0 ]]; then
+    echo "Non-interactive TTY: pass --yes" >&2
+    return 1
+  fi
+  # shellcheck disable=SC2162
+  read -r -p "Type ${base} to confirm: " reply
+  [[ "$reply" == "$base" ]]
+}
+
+remove_app_dir() {
+  local app="${1:?}"
+  [[ -e "$app" ]] || return 0
+  echo "==> Removing ${app}"
+  if rm -rf "$app" 2>/dev/null; then
+    return 0
+  fi
+  if command -v podman >/dev/null 2>&1; then
+    podman unshare rm -rf "$app"
+    return 0
+  fi
+  echo "Could not remove ${app} (permission). Stop agents and retry." >&2
+  return 1
+}
 
 # Bootstrap TLS for nginx when no CA-issued certs are installed.
 # RODiT JWT handles mutual auth on A2A/webhooks; self-signed PEMs encrypt transport only.
@@ -133,8 +176,30 @@ ensure_tls_certs() {
     h="$(agent_public_host "$id")"
     [[ -n "$h" ]] && { tls_cn="$h"; break; }
   done
-  TLS_CN="${tls_cn}" EXTRA_SANS="$extra_sans" \
+  TLS_CN="${tls_cn:-agent-a.identyclaw.com}" EXTRA_SANS="$extra_sans" \
     bash "${IDENTYCLAW_ROOT}/scripts/generate-self-signed-certs.sh" "$cert_dir" "${args[@]}"
+}
+
+# Last step of setup: create self-signed PEMs if missing and print where they live.
+setup_ensure_self_signed_certs() {
+  local cert_dir
+  cert_dir="$(identyclaw_app_dir)/certs"
+  echo ""
+  echo "==> Self-signed TLS certificates"
+  if [[ -s "${cert_dir}/fullchain.pem" && -s "${cert_dir}/privkey.pem" ]]; then
+    echo "Already present (not overwritten):"
+    echo "  ${cert_dir}/fullchain.pem"
+    echo "  ${cert_dir}/privkey.pem"
+    return 0
+  fi
+  if ensure_tls_certs && [[ -s "${cert_dir}/fullchain.pem" && -s "${cert_dir}/privkey.pem" ]]; then
+    echo "Created self-signed certificate (bootstrap TLS — replace with CA-issued PEMs when ready):"
+    echo "  ${cert_dir}/fullchain.pem"
+    echo "  ${cert_dir}/privkey.pem"
+    return 0
+  fi
+  echo "Could not create self-signed certs — later: ./identyclaw.sh generate-certs" >&2
+  return 1
 }
 
 

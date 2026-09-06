@@ -6,8 +6,9 @@
 #
 # Commands:
 #   build-image          Pull base + build openclaw-agent:local
-#   init                 Create sibling -app dir + env.local (config/secrets live there)
-#   setup                Populate -app (agent dirs, optional Passport fields); last: auto NEAR enroll + mint guide
+#   init                 Create sibling -app dir + env.local if missing (never overwrites)
+#   nuke [--yes]         Delete -app and re-seed from templates (overwrites; confirmation required)
+#   setup                Populate -app (LLM/mail/Telegram if missing, Passport); NEAR enroll; self-signed TLS last
 #   set-password <id|all>  Set Migadu mailbox password (agent-{a-z} or all AGENT_IDS)
 #   set-discord-token <id>  Store Discord bot token in secrets/ (survives rebuilds)
 #   set-telegram-token <id> Store Telegram bot token in secrets/ (survives rebuilds)
@@ -83,7 +84,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$ROOT/scripts/lib.sh"
 
 usage() {
-  sed -n '2,77p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,78p' "$0" | sed 's/^# \{0,1\}//'
   exit "${1:-0}"
 }
 
@@ -180,23 +181,72 @@ init_agent_from_env() {
 }
 
 cmd_init() {
+  local app env_file existed=0
   require_rootless_user
+  require_setup_prereqs || exit 1
+  app="$(identyclaw_app_dir)"
+  env_file="$(identyclaw_env_file)"
+  [[ -f "$env_file" ]] && existed=1
   ensure_app_layout
-  echo "App dir: $(identyclaw_app_dir)"
-  echo "Config:  $(identyclaw_env_file)"
+  echo "App dir: ${app}"
+  echo "Config:  ${env_file}"
+  if [[ "$existed" == "1" ]]; then
+    echo "env.local already exists (leaving unchanged). To replace the -app dir: $0 nuke"
+  fi
   echo "Next: edit env.local (AGENT_IDS, emails, public hosts), then: $0 setup"
 }
 
-# Populate -app (agent state, optional Passport fields). Last step: auto NEAR
-# implicit account (no operator input) + purchase.identyclaw.com mint guide.
+# Wipe sibling -app (configs, secrets, Passport keys, sessions) and re-run init.
+cmd_nuke() {
+  local yes=0 arg app
+  require_rootless_user
+  for arg in "$@"; do
+    case "$arg" in
+      --yes|-y) yes=1 ;;
+      -h|--help)
+        echo "Usage: $0 nuke [--yes]"
+        echo "  Deletes $(identyclaw_app_dir) and re-seeds from env.example."
+        echo "  init never overwrites; nuke is the overwrite path."
+        return 0
+        ;;
+      *)
+        echo "Usage: $0 nuke [--yes]" >&2
+        exit 1
+        ;;
+    esac
+  done
+  app="$(identyclaw_app_dir)"
+  if ! app_dir_is_nukeable "$app"; then
+    echo "Refusing to nuke ${app} (expected a sibling *-app directory, not HOME or the git checkout)" >&2
+    exit 1
+  fi
+  if [[ -e "$app" ]]; then
+    confirm_app_nuke "$app" "$yes" || { echo "aborted"; exit 1; }
+    if command -v podman >/dev/null 2>&1 && [[ -f "$(identyclaw_env_file)" ]]; then
+      load_env
+      cmd_stop all >/dev/null 2>&1 || true
+    fi
+    restore_pod_agent_state_for_host 2>/dev/null || true
+    remove_app_dir "$app" || exit 1
+  else
+    echo "No app dir yet at ${app} — running init"
+  fi
+  cmd_init
+}
+
+# Populate -app (agent state, operator secrets, Passport fields). Then auto
+# NEAR implicit account (no operator input) + mint guide. Self-signed TLS last.
 cmd_setup() {
   local id first_id=""
   require_rootless_user
+  require_setup_prereqs || exit 1
   ensure_app_layout
   load_env
   echo "==> Populating $(identyclaw_app_dir) for: $(configured_agent_ids)"
+  unset SETUP_SHARED_LLM_KEY SETUP_SHARED_MAIL_PASSWORD || true
   for id in $(configured_agent_ids); do
     init_agent_from_env "$id"
+    setup_collect_operator_secrets_one "$id"
     setup_collect_passport_fields_one "$id"
     [[ -z "$first_id" ]] && first_id="$id"
   done
@@ -204,6 +254,8 @@ cmd_setup() {
   if [[ "${SKIP_IDCP_SETUP:-0}" == "1" ]]; then
     echo ""
     echo "(SKIP_IDCP_SETUP=1 — NEAR enroll skipped; run: $0 idcp-setup ${first_id:-agent-a})"
+    setup_ensure_self_signed_certs || true
+    echo ""
     echo "Next: $0 build-image && $0 start all"
     return 0
   fi
@@ -225,6 +277,8 @@ cmd_setup() {
     echo "Passport setup incomplete for: ${idcp_failed[*]}" >&2
     echo "Resume after mint: $0 idcp-setup <id>" >&2
   fi
+
+  setup_ensure_self_signed_certs || true
 
   echo ""
   echo "Next:"
@@ -1676,6 +1730,7 @@ main() {
   case "$cmd" in
     build-image) cmd_build_image "$@" ;;
     init) cmd_init "$@" ;;
+    nuke) cmd_nuke "$@" ;;
     setup) cmd_setup "$@" ;;
     idcp-setup) cmd_idcp_setup "$@" ;;
     idcp-install) cmd_idcp_install "$@" ;;

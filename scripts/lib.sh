@@ -18,6 +18,63 @@ identyclaw_env_file() {
   echo "$(identyclaw_app_dir)/env.local"
 }
 
+_prereq_install_hint() {
+  local pkgs="$1" id="" like=""
+  if [[ -r /etc/os-release ]]; then
+    # shellcheck disable=SC1091
+    id="$(. /etc/os-release && printf '%s' "${ID:-}")"
+    like="$(. /etc/os-release && printf '%s' "${ID_LIKE:-}")"
+  fi
+  case " ${id} ${like} " in
+    *" rhel "*|*" fedora "*|*" centos "*|*" almalinux "*|*" rocky "*)
+      echo "Install (AlmaLinux / RHEL / Fedora): sudo dnf install -y ${pkgs}" >&2
+      ;;
+    *" debian "*|*" ubuntu "*)
+      echo "Install (Debian / Ubuntu): sudo apt-get install -y ${pkgs}" >&2
+      ;;
+    *)
+      echo "Install: ${pkgs}" >&2
+      ;;
+  esac
+}
+
+# Fail fast with an install hint. Used at the start of init and setup.
+require_setup_prereqs() {
+  local missing=() name ver major
+  echo "==> Checking prerequisites"
+  for name in podman python3 openssl node npm; do
+    if command -v "$name" >/dev/null 2>&1; then
+      case "$name" in
+        podman) ver="$(podman --version 2>/dev/null | head -1)" ;;
+        python3) ver="$(python3 --version 2>/dev/null)" ;;
+        openssl) ver="$(openssl version 2>/dev/null)" ;;
+        node) ver="$(node --version 2>/dev/null)" ;;
+        npm) ver="$(npm --version 2>/dev/null)" ;;
+        *) ver="" ;;
+      esac
+      echo "    ok  ${name}${ver:+  (${ver})}"
+    else
+      missing+=("$name")
+      echo "    missing  ${name}"
+    fi
+  done
+  if command -v node >/dev/null 2>&1; then
+    major="$(node --version 2>/dev/null | sed 's/^v//' | cut -d. -f1)"
+    if [[ "${major:-0}" -lt 22 ]]; then
+      echo "    warn  Node.js 22+ recommended (found $(node --version 2>/dev/null))" >&2
+    fi
+  fi
+  if ! command -v loginctl >/dev/null 2>&1; then
+    echo "    skip  loginctl (optional; needed only for enable-boot linger)"
+  fi
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    echo "Missing required tools: ${missing[*]}" >&2
+    _prereq_install_hint "podman python3 openssl nodejs npm"
+    return 1
+  fi
+  return 0
+}
+
 # Mirrors .github/workflows/deploy.yml tier mapping:
 # refs/heads/main -> main; any other branch (e.g. development) -> development.
 
