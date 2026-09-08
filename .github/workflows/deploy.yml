@@ -250,3 +250,4 @@ jobs:
         run: |
           echo "Deploy scripts and identyclaw.sh are at: ${{ env.APP_DIR }}/repo/"
           echo "Restart gateways on host: ${{ env.APP_DIR }}/repo/identyclaw.sh restart all"
+# redeploy trigger 2026-09-08
